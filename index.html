@@ -50,22 +50,20 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";  // <— necesario para GLB con Draco
 
 /* ========= CONFIG =========
-   Si vas a publicar en GitHub Pages + Cloudflare Worker,
-   pon aquí la URL de tu Worker (termina en /series).
-   Ejemplo: https://flux-proxy.tuusuario.workers.dev/series
+   Publicado en GitHub Pages + Cloudflare Worker.
 =========================== */
-const PROXY_URL = "https://flux-proxy.daalbumu.workers.dev/series"; // <-- CAMBIA ESTO
-/* Si sirves el GLB desde el mismo repo (o reemplázalo por la URL de Releases/bucket) */
-const GLB_URL = "./escena.glb";
+const PROXY_URL = "https://flux-proxy.daalbumu.workers.dev/series"; // tu Worker
+const GLB_URL   = "./escena.glb";  // sube 'escena.glb' a la raíz del repo
 
 /* --- Canvas + HUD refs --- */
-const canvas = document.getElementById('c');
+const canvas  = document.getElementById('c');
 const tooltip = document.getElementById('tooltip');
 const loading = document.getElementById('loading');
-const hud165 = document.getElementById('station165').querySelector('code');
-const hud157 = document.getElementById('station157').querySelector('code');
+const hud165  = document.getElementById('station165').querySelector('code');
+const hud157  = document.getElementById('station157').querySelector('code');
 
 /* --- Etiquetas base (del proyecto) --- */
 const LABELS = {
@@ -82,12 +80,8 @@ const LABELS = {
 };
 
 /* --- Mapa canónico para tolerar renombres (Mesh_0.011 vs Mesh_0011) --- */
-function canon(s){
-  return String(s||"").toLowerCase().replace(/[^\w]/g,"");
-}
-const CANON_LABELS = Object.fromEntries(
-  Object.entries(LABELS).map(([k,v]) => [canon(k), v])
-);
+function canon(s){ return String(s||"").toLowerCase().replace(/[^\w]/g,""); }
+const CANON_LABELS = Object.fromEntries(Object.entries(LABELS).map(([k,v]) => [canon(k), v]));
 
 /* --- Three.js base --- */
 const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
@@ -115,9 +109,9 @@ function frameObject(object, camera, controls, padding = 1.2) {
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
   const maxSize = Math.max(size.x, size.y, size.z);
-  const fitHeightDistance = maxSize / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)));
-  const fitWidthDistance  = fitHeightDistance / camera.aspect;
-  const distance = padding * Math.max(fitHeightDistance, fitWidthDistance);
+  const fitH = maxSize / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)));
+  const fitW = fitH / camera.aspect;
+  const distance = padding * Math.max(fitH, fitW);
   const dir = new THREE.Vector3().subVectors(camera.position, controls.target).normalize().multiplyScalar(distance);
   controls.target.copy(center);
   camera.position.copy(center).add(dir);
@@ -125,9 +119,16 @@ function frameObject(object, camera, controls, padding = 1.2) {
   camera.updateProjectionMatrix(); controls.update();
 }
 
-/* --- Cargar GLB + animaciones + encuadre --- */
+/* --- Cargar GLB + Draco + animaciones + encuadre --- */
 let mixers = [];
+
+// DRACO loader (necesario para .glb comprimidos)
+const draco = new DRACOLoader();
+draco.setDecoderPath("https://unpkg.com/three@0.160.0/examples/jsm/libs/draco/");
+
 const loader = new GLTFLoader();
+loader.setDRACOLoader(draco);
+
 loader.load(
   GLB_URL,
   (gltf)=>{
@@ -157,7 +158,7 @@ loader.load(
   }
 );
 
-/* --- Tooltips on-hover: usa userData.label o fallback canónico --- */
+/* --- Tooltips on-hover --- */
 const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2(-1,-1);
 
@@ -170,14 +171,14 @@ window.addEventListener('pointermove', e=>{
 });
 
 function getLabelFrom(object){
-  // 1) Intenta leer etiqueta exportada desde Blender (Custom Properties -> userData.label)
+  // 1) etiqueta exportada desde Blender (Custom Properties -> userData.label)
   let o = object;
   while (o) {
     const ud = o.userData || {};
     if (ud.label && String(ud.label).trim() !== "") return String(ud.label);
     o = o.parent;
   }
-  // 2) Fallback tolerante a renombres con ceros/guiones
+  // 2) fallback tolerante a renombres
   const c = canon(object.name);
   return CANON_LABELS[c] || object.name;
 }
@@ -187,8 +188,7 @@ function updateTooltip(){
   const hits = raycaster.intersectObjects(scene.children, true);
   const hit = hits.find(h => h.object && h.object.isMesh);
   if (hit && hit.object) {
-    const label = getLabelFrom(hit.object);
-    tooltip.textContent = label;
+    tooltip.textContent = getLabelFrom(hit.object);
     tooltip.style.display = 'block';
   } else {
     tooltip.style.display = 'none';
@@ -221,7 +221,6 @@ function lastPoint(list){ if(!Array.isArray(list)) return null;
 async function fetchStation(stationId, windowDays=8){
   const nowS = Math.floor(Date.now()/1000), startS = nowS - windowDays*24*3600;
   const qs = new URLSearchParams({stationId:String(stationId), field:VARIABLES.join(","), startTime:String(startS), endTime:String(nowS)});
-  // Usar el Worker en vez de /series local
   const r = await fetch(`${PROXY_URL}?${qs}`, { cache:"no-store" });
   if(!r.ok) throw new Error("Proxy error "+r.status);
   return r.json();
