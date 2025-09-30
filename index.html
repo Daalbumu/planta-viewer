@@ -1,5 +1,244 @@
 <!doctype html>
-<html lang="es"><meta charset="utf-8">
-<title>Prueba GitHub Pages</title>
-<h1>¡Hola! GitHub Pages está funcionando ✅</h1>
-<p>Si ves este texto, la página ya sirve <code>index.html</code>.</p>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Modelo interactivo + FluxSuite</title>
+<style>
+  html,body{margin:0;height:100%;background:#111;color:#fff;font-family:system-ui,Segoe UI,Roboto,Arial}
+  #c{width:100%;height:100%;display:block}
+  #tooltip{
+    position:fixed;pointer-events:none;padding:.4rem .6rem;background:rgba(0,0,0,.75);
+    border:1px solid rgba(255,255,255,.2);border-radius:6px;transform:translate(12px,12px);
+    display:none;font-size:14px;white-space:nowrap
+  }
+  #hud{
+    position:fixed;left:12px;top:12px;background:rgba(0,0,0,.55);padding:.6rem .8rem;border-radius:8px;
+    border:1px solid rgba(255,255,255,.2);max-width:52ch;font-size:14px;line-height:1.15;z-index:5
+  }
+  #hud h3{margin:.2rem 0 .4rem;font-size:15px} #hud code{font-size:13px}
+  #loading{
+    position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,.6);
+    padding:.8rem 1rem;border:1px solid rgba(255,255,255,.2);border-radius:8px;z-index:10
+  }
+</style>
+
+<!-- Import map: resuelve 'three' y los addons -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="tooltip"></div>
+
+<div id="hud">
+  <h3>Datos (último valor por variable)</h3>
+  <div id="station165">Torre 165: <code>—</code></div>
+  <div id="station157">Torre 157: <code>—</code></div>
+  <div style="margin-top:.35rem;opacity:.7;">Se actualiza cada ~10 min</div>
+</div>
+
+<div id="loading">Cargando modelo…</div>
+
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+
+/* ========= CONFIG =========
+   Si vas a publicar en GitHub Pages + Cloudflare Worker,
+   pon aquí la URL de tu Worker (termina en /series).
+   Ejemplo: https://flux-proxy.tuusuario.workers.dev/series
+=========================== */
+const PROXY_URL = "https://flux-proxy.daalbumu.workers.dev/series"; // <-- CAMBIA ESTO
+/* Si sirves el GLB desde el mismo repo (o reemplázalo por la URL de Releases/bucket) */
+const GLB_URL = "./escena.glb";
+
+/* --- Canvas + HUD refs --- */
+const canvas = document.getElementById('c');
+const tooltip = document.getElementById('tooltip');
+const loading = document.getElementById('loading');
+const hud165 = document.getElementById('station165').querySelector('code');
+const hud157 = document.getElementById('station157').querySelector('code');
+
+/* --- Etiquetas base (del proyecto) --- */
+const LABELS = {
+  "Mesh_0.011": "Machín petrolero",
+  "Mesh_0.002": "1 Cámaras automatizadas LI-COR 8200",
+  "Mesh_0.003": "2 Cámaras automatizadas LI-COR 8200",
+  "Mesh_0.004": "3 Cámaras automatizadas LI-COR 8200",
+  "Mesh_0.005": "4 Cámaras automatizadas LI-COR 8200",
+  "Mesh_0.018": "1 PALAS",
+  "Mesh_0.059": "2 PALAS",
+  "Mesh_0.001": "torre eddy covarience sur",
+  "Mesh_0.008": "torre eddy covarience norte",
+  "Mesh_0.034": "Llanito 114"
+};
+
+/* --- Mapa canónico para tolerar renombres (Mesh_0.011 vs Mesh_0011) --- */
+function canon(s){
+  return String(s||"").toLowerCase().replace(/[^\w]/g,"");
+}
+const CANON_LABELS = Object.fromEntries(
+  Object.entries(LABELS).map(([k,v]) => [canon(k), v])
+);
+
+/* --- Three.js base --- */
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x111111);
+
+const camera = new THREE.PerspectiveCamera(50, 2, 0.1, 50000);
+camera.position.set(8, 8, 12);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+
+const hemi = new THREE.HemisphereLight(0xffffff, 0x303030, 0.9);
+const dir  = new THREE.DirectionalLight(0xffffff, 1.2);
+dir.position.set(20,30,20);
+scene.add(hemi, dir);
+
+/* --- Centrar/encuadrar el modelo --- */
+function frameObject(object, camera, controls, padding = 1.2) {
+  const box = new THREE.Box3().setFromObject(object);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const maxSize = Math.max(size.x, size.y, size.z);
+  const fitHeightDistance = maxSize / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)));
+  const fitWidthDistance  = fitHeightDistance / camera.aspect;
+  const distance = padding * Math.max(fitHeightDistance, fitWidthDistance);
+  const dir = new THREE.Vector3().subVectors(camera.position, controls.target).normalize().multiplyScalar(distance);
+  controls.target.copy(center);
+  camera.position.copy(center).add(dir);
+  camera.near = distance / 100; camera.far = distance * 100;
+  camera.updateProjectionMatrix(); controls.update();
+}
+
+/* --- Cargar GLB + animaciones + encuadre --- */
+let mixers = [];
+const loader = new GLTFLoader();
+loader.load(
+  GLB_URL,
+  (gltf)=>{
+    loading.textContent = "Procesando escena…";
+    scene.add(gltf.scene);
+
+    if (gltf.animations && gltf.animations.length) {
+      const mixer = new THREE.AnimationMixer(gltf.scene);
+      gltf.animations.forEach(clip=>{
+        const act = mixer.clipAction(clip);
+        act.loop = THREE.LoopRepeat;
+        act.play();
+      });
+      mixers.push(mixer);
+    }
+
+    frameObject(gltf.scene, camera, controls, 1.3);
+    loading.style.display = "none";
+  },
+  (xhr)=>{
+    const total = xhr.total || 0;
+    loading.textContent = total ? `Cargando modelo… ${Math.round((xhr.loaded/total)*100)}%` : "Cargando modelo…";
+  },
+  (err)=>{
+    console.error("Error GLB:", err);
+    loading.textContent = "Error cargando el modelo. Revisa la consola (F12).";
+  }
+);
+
+/* --- Tooltips on-hover: usa userData.label o fallback canónico --- */
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2(-1,-1);
+
+window.addEventListener('pointermove', e=>{
+  const r = renderer.domElement.getBoundingClientRect();
+  mouse.x = ((e.clientX - r.left) / r.width ) * 2 - 1;
+  mouse.y = -((e.clientY - r.top ) / r.height) * 2 + 1;
+  tooltip.style.left = `${e.clientX}px`;
+  tooltip.style.top  = `${e.clientY}px`;
+});
+
+function getLabelFrom(object){
+  // 1) Intenta leer etiqueta exportada desde Blender (Custom Properties -> userData.label)
+  let o = object;
+  while (o) {
+    const ud = o.userData || {};
+    if (ud.label && String(ud.label).trim() !== "") return String(ud.label);
+    o = o.parent;
+  }
+  // 2) Fallback tolerante a renombres con ceros/guiones
+  const c = canon(object.name);
+  return CANON_LABELS[c] || object.name;
+}
+
+function updateTooltip(){
+  raycaster.setFromCamera(mouse, camera);
+  const hits = raycaster.intersectObjects(scene.children, true);
+  const hit = hits.find(h => h.object && h.object.isMesh);
+  if (hit && hit.object) {
+    const label = getLabelFrom(hit.object);
+    tooltip.textContent = label;
+    tooltip.style.display = 'block';
+  } else {
+    tooltip.style.display = 'none';
+  }
+}
+
+/* --- Loop de render --- */
+function resize(){
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (canvas.width !== w || canvas.height !== h) {
+    renderer.setSize(w, h, false);
+    camera.aspect = w/h; camera.updateProjectionMatrix();
+  }
+}
+let last = performance.now();
+function animate(now){
+  const dt = (now - last)/1000; last = now;
+  resize(); controls.update();
+  mixers.forEach(m=>m.update(dt));
+  updateTooltip();
+  renderer.render(scene, camera);
+  requestAnimationFrame(animate);
+}
+requestAnimationFrame(animate);
+
+/* --- Datos (cada 10 min) --- */
+const VARIABLES = ["H","LE","Rn_1_1_1","ch4_flux","co2_flux"];
+function lastPoint(list){ if(!Array.isArray(list)) return null;
+  for(let i=list.length-1;i>=0;i--){const [ts,v]=list[i]; if(v!=null) return {ts,v};} return null; }
+async function fetchStation(stationId, windowDays=8){
+  const nowS = Math.floor(Date.now()/1000), startS = nowS - windowDays*24*3600;
+  const qs = new URLSearchParams({stationId:String(stationId), field:VARIABLES.join(","), startTime:String(startS), endTime:String(nowS)});
+  // Usar el Worker en vez de /series local
+  const r = await fetch(`${PROXY_URL}?${qs}`, { cache:"no-store" });
+  if(!r.ok) throw new Error("Proxy error "+r.status);
+  return r.json();
+}
+async function refreshData(){
+  try {
+    const [d165, d157] = await Promise.all([ fetchStation(165), fetchStation(157) ]);
+    const fmt = d => VARIABLES.map(k=>{
+      const serie = (d.series?.[k]?.[0]?.data) || [];
+      const p = lastPoint(serie);
+      return `${k}: ${p ? Number(p.v).toFixed(2) : 'N/A'}`;
+    }).join(" · ");
+    hud165.textContent = fmt(d165);
+    hud157.textContent = fmt(d157);
+  } catch(e){ console.error(e); }
+}
+refreshData(); setInterval(refreshData, 600_000); // 10 min
+</script>
+</body>
+</html>
