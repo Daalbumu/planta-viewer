@@ -22,7 +22,7 @@
     padding:.8rem 1rem;border:1px solid rgba(255,255,255,.2);border-radius:8px;z-index:10
   }
 
-  /* ====== (AGREGADO) Panel de gráfica CO₂ 157 a la derecha ====== */
+  /* ====== Panel derecha (igual que antes) ====== */
   #charts{
     position:fixed;right:12px;top:12px;width:520px;max-height:calc(100% - 24px);
     background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.2);border-radius:8px;
@@ -39,12 +39,13 @@
     cursor:pointer;background:#2a2a2a;color:#fff;border:1px solid rgba(255,255,255,.2);
     padding:.35rem .6rem;border-radius:6px;font-size:12px
   }
-  #chart_CO2_157{
-    background:rgba(255,255,255,.04);border-radius:6px;margin-top:.5rem; height:320px;
-  }
+  /* ====== NUEVO: contenedor 50/50 gráfica/imagen ====== */
+  #charts .split{display:flex;flex-direction:column;gap:8px;height:calc(100% - 90px);margin-top:.5rem}
+  #charts .split canvas, #charts .split img{flex:1 1 50%;min-height:0}
+  #charts .split img{width:100%;object-fit:cover;border-radius:6px;background:#0b0b0b}
 </style>
 
-<!-- Import map: resuelve 'three' y los addons -->
+<!-- Import map -->
 <script type="importmap">
 {
   "imports": {
@@ -54,7 +55,7 @@
 }
 </script>
 
-<!-- (AGREGADO) Chart.js para la gráfica -->
+<!-- NUEVO: Chart.js para la gráfica -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -68,8 +69,8 @@
   <div style="margin-top:.35rem;opacity:.7;">Se actualiza cada ~10 min</div>
 </div>
 
-<!-- (AGREGADO) Panel de gráfica de CO₂ — Torre 157 -->
-<div id="charts">
+<!-- NUEVO: Panel de gráfica + imagen -->
+<div id="charts" style="height:92vh">
   <div class="row" style="margin-bottom:.4rem;">
     <h3 style="flex:1">CO₂ flux — Torre 157</h3>
   </div>
@@ -89,7 +90,11 @@
     </label>
     <button id="btnLast">Usar últimos N días</button>
   </div>
-  <canvas id="chart_CO2_157"></canvas>
+  <div class="split">
+    <canvas id="chart_CO2_157"></canvas>
+    <!-- NUEVO: imagen debajo, 50% de alto -->
+    <img id="sitePhoto" src="./llanito114.jpg" alt="Llanito 114" />
+  </div>
 </div>
 
 <div id="loading">Cargando modelo…</div>
@@ -100,11 +105,9 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";  // <— necesario para GLB con Draco
 
-/* ========= CONFIG =========
-   Publicado en GitHub Pages + Cloudflare Worker.
-=========================== */
-const PROXY_URL = "https://flux-proxy.daalbumu.workers.dev/series"; // tu Worker
-const GLB_URL   = "./escena.glb";  // sube 'escena.glb' a la raíz del repo
+/* ========= CONFIG ========= */
+const PROXY_URL = "https://flux-proxy.daalbumu.workers.dev/series";
+const GLB_URL   = "./escena.glb";
 
 /* --- Canvas + HUD refs --- */
 const canvas  = document.getElementById('c');
@@ -113,7 +116,7 @@ const loading = document.getElementById('loading');
 const hud165  = document.getElementById('station165').querySelector('code');
 const hud157  = document.getElementById('station157').querySelector('code');
 
-/* --- Etiquetas base (del proyecto) --- */
+/* --- Etiquetas base --- */
 const LABELS = {
   "Mesh_0.011": "Machín petrolero",
   "Mesh_0.002": "1 Cámaras automatizadas LI-COR 8200",
@@ -126,8 +129,6 @@ const LABELS = {
   "Mesh_0.008": "torre eddy covarience norte",
   "Mesh_0.034": "Llanito 114"
 };
-
-/* --- Mapa canónico para tolerar renombres (Mesh_0.011 vs Mesh_0011) --- */
 function canon(s){ return String(s||"").toLowerCase().replace(/[^\w]/g,""); }
 const CANON_LABELS = Object.fromEntries(Object.entries(LABELS).map(([k,v]) => [canon(k), v]));
 
@@ -151,7 +152,7 @@ const dir  = new THREE.DirectionalLight(0xffffff, 1.2);
 dir.position.set(20,30,20);
 scene.add(hemi, dir);
 
-/* --- Centrar/encuadrar el modelo --- */
+/* --- Centrar --- */
 function frameObject(object, camera, controls, padding = 1.2) {
   const box = new THREE.Box3().setFromObject(object);
   const size = box.getSize(new THREE.Vector3());
@@ -167,10 +168,8 @@ function frameObject(object, camera, controls, padding = 1.2) {
   camera.updateProjectionMatrix(); controls.update();
 }
 
-/* --- Cargar GLB + Draco + animaciones + encuadre --- */
+/* --- GLB + Draco --- */
 let mixers = [];
-
-// DRACO loader (necesario para .glb comprimidos)
 const draco = new DRACOLoader();
 draco.setDecoderPath("https://unpkg.com/three@0.160.0/examples/jsm/libs/draco/");
 
@@ -206,7 +205,7 @@ loader.load(
   }
 );
 
-/* --- Tooltips on-hover --- */
+/* --- Tooltips --- */
 const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2(-1,-1);
 
@@ -219,14 +218,12 @@ window.addEventListener('pointermove', e=>{
 });
 
 function getLabelFrom(object){
-  // 1) etiqueta exportada desde Blender (Custom Properties -> userData.label)
   let o = object;
   while (o) {
     const ud = o.userData || {};
     if (ud.label && String(ud.label).trim() !== "") return String(ud.label);
     o = o.parent;
   }
-  // 2) fallback tolerante a renombres
   const c = canon(object.name);
   return CANON_LABELS[c] || object.name;
 }
@@ -243,7 +240,7 @@ function updateTooltip(){
   }
 }
 
-/* --- Loop de render --- */
+/* --- Loop render --- */
 function resize(){
   const w = canvas.clientWidth, h = canvas.clientHeight;
   if (canvas.width !== w || canvas.height !== h) {
@@ -262,7 +259,7 @@ function animate(now){
 }
 requestAnimationFrame(animate);
 
-/* --- Datos (cada 10 min) --- */
+/* --- Datos HUD --- */
 const VARIABLES = ["H","LE","Rn_1_1_1","ch4_flux","co2_flux"];
 function lastPoint(list){ if(!Array.isArray(list)) return null;
   for(let i=list.length-1;i>=0;i--){const [ts,v]=list[i]; if(v!=null) return {ts,v};} return null; }
@@ -285,37 +282,55 @@ async function refreshData(){
     hud157.textContent = fmt(d157);
   } catch(e){ console.error(e); }
 }
-refreshData(); setInterval(refreshData, 600_000); // 10 min
+refreshData(); setInterval(refreshData, 600_000);
 
-/* ========== (AGREGADO) Gráfica CO₂ — Torre 157 ========== */
+/* ===== NUEVO: gráfica CO₂ 157 con color por signo + rango ===== */
 const dtFrom = document.getElementById('dtFrom');
 const dtTo   = document.getElementById('dtTo');
 const btnApply = document.getElementById('btnApply');
 const btnLast  = document.getElementById('btnLast');
 const selDays  = document.getElementById('selDays');
-let co2Chart;
 
+let co2Chart;
 const toEpochS = (dtLocal)=> Math.floor(new Date(dtLocal).getTime()/1000);
 const fmtTs = (ms)=> new Date(ms).toLocaleString([], {hour12:false, month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'});
 
 function upsertCO2157(labels, values){
   const ctx = document.getElementById('chart_CO2_157');
-  if(co2Chart){ co2Chart.data.labels = labels; co2Chart.data.datasets[0].data = values; co2Chart.update(); return; }
+  if(co2Chart){
+    co2Chart.data.labels = labels;
+    co2Chart.data.datasets[0].data = values;
+    co2Chart.update(); return;
+  }
   co2Chart = new Chart(ctx, {
     type:'line',
-    data:{ labels, datasets:[{ label:'co2_flux (µmol/m²s) — 157', data:values, fill:false, tension:0.2, pointRadius:0, borderWidth:2 }] },
-    options:{ animation:false, responsive:true, maintainAspectRatio:false,
+    data:{ labels, datasets:[{
+      label:'co2_flux (µmol/m²s) — 157',
+      data:values, fill:false, tension:0.2, pointRadius:0, borderWidth:2,
+      // Colorear segmentos por signo
+      segment: {
+        borderColor: ctx => {
+          const y0 = ctx.p0.parsed.y, y1 = ctx.p1.parsed.y;
+          if ((y0 >= 0 && y1 >= 0)) return 'red';
+          if ((y0 <= 0 && y1 <= 0)) return 'blue';
+          return y0 >= 0 ? 'red' : 'blue'; // al cruzar 0
+        }
+      }
+    }]},
+    options:{
+      animation:false, responsive:true, maintainAspectRatio:false,
       plugins:{ legend:{display:false}, tooltip:{mode:'index', intersect:false} },
-      scales:{ x:{ ticks:{ color:'#ddd', maxTicksLimit:6 }, grid:{ color:'rgba(255,255,255,.08)' } },
-              y:{ ticks:{ color:'#ddd' }, grid:{ color:'rgba(255,255,255,.08)' }, title:{display:true,text:'µmol m⁻² s⁻¹'} } }
+      scales:{
+        x:{ ticks:{ color:'#ddd', maxTicksLimit:6 }, grid:{ color:'rgba(255,255,255,.08)' } },
+        y:{ ticks:{ color:'#ddd' }, grid:{ color:'rgba(255,255,255,.08)' },
+            title:{display:true,text:'µmol m⁻² s⁻¹'} }
+      }
     }
   });
 }
 
 async function fetchCO2157(startS, endS){
-  const qs = new URLSearchParams({
-    stationId:'157', field:'co2_flux', startTime:String(startS), endTime:String(endS), format:'highcharts'
-  });
+  const qs = new URLSearchParams({stationId:'157', field:'co2_flux', startTime:String(startS), endTime:String(endS), format:'highcharts'});
   const r = await fetch(`${PROXY_URL}?${qs}`, { cache:'no-store' });
   if(!r.ok) throw new Error('Proxy error '+r.status);
   const data = await r.json();
@@ -324,7 +339,6 @@ async function fetchCO2157(startS, endS){
   for(const [ts,v] of serie){ if(v==null) continue; labels.push(fmtTs(ts)); values.push(v); }
   return {labels, values};
 }
-
 async function drawCO2157(startS, endS){
   try{ const s = await fetchCO2157(startS,endS); upsertCO2157(s.labels, s.values); }
   catch(e){ console.error('CO2 chart error:', e); }
@@ -334,15 +348,10 @@ async function drawCO2157(startS, endS){
 (function setDefaults(){
   const now = new Date();
   const from = new Date(now.getTime() - 10*24*3600*1000);
-  const toLocal = (d)=> {
-    const pad = n => String(n).padStart(2,'0');
-    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  };
+  const toLocal = d=>{ const pad=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
   if(dtFrom) dtFrom.value = toLocal(from);
   if(dtTo)   dtTo.value   = toLocal(now);
 })();
-
-// Eventos
 if(btnApply) btnApply.addEventListener('click', ()=>{
   if(!dtFrom.value || !dtTo.value) return;
   const startS = toEpochS(dtFrom.value), endS = toEpochS(dtTo.value);
@@ -354,7 +363,7 @@ if(btnLast) btnLast.addEventListener('click', ()=>{
   const startS = endS - days*24*3600;
   drawCO2157(startS, endS);
 });
-// Pintar inicial
+// primera carga
 (function initialCO2(){
   const endS = Math.floor(Date.now()/1000);
   const startS = endS - 10*24*3600;
