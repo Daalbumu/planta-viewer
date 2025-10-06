@@ -65,20 +65,6 @@ const loading = document.getElementById('loading');
 const hud165  = document.getElementById('station165').querySelector('code');
 const hud157  = document.getElementById('station157').querySelector('code');
 
-/* --- Etiquetas base (del proyecto) --- */
-const LABELS = {
-  "Mesh_0.011": "Machín petrolero",
-  "Mesh_0.002": "1 Cámaras automatizadas LI-COR 8200",
-  "Mesh_0.003": "2 Cámaras automatizadas LI-COR 8200",
-  "Mesh_0.004": "3 Cámaras automatizadas LI-COR 8200",
-  "Mesh_0.005": "4 Cámaras automatizadas LI-COR 8200",
-  "Mesh_0.018": "1 PALAS",
-  "Mesh_0.059": "2 PALAS",
-  "Mesh_0.001": "torre eddy covarience sur",
-  "Mesh_0.008": "torre eddy covarience norte",
-  "Mesh_0.034": "Llanito 114"
-};
-
 /* --- Mapa canónico para tolerar renombres (Mesh_0.011 vs Mesh_0011) --- */
 function canon(s){ return String(s||"").toLowerCase().replace(/[^\w]/g,""); }
 const CANON_LABELS = Object.fromEntries(Object.entries(LABELS).map(([k,v]) => [canon(k), v]));
