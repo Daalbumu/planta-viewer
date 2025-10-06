@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Modelo interactivo + FluxSuite</title>
+<title>Modelo interactivo + FluxSuite — solo CO₂ flux</title>
 <style>
   html,body{margin:0;height:100%;background:#111;color:#fff;font-family:system-ui,Segoe UI,Roboto,Arial}
   #c{width:100%;height:100%;display:block}
   #tooltip{
     position:fixed;pointer-events:none;padding:.4rem .6rem;background:rgba(0,0,0,.75);
     border:1px solid rgba(255,255,255,.2);border-radius:6px;transform:translate(12px,12px);
-    display:none;font-size:14px;white-space:nowrap
+    display:none;font-size:14px;white-space:nowrap;z-index:7
   }
   #hud{
     position:fixed;left:12px;top:12px;background:rgba(0,0,0,.55);padding:.6rem .8rem;border-radius:8px;
@@ -21,6 +21,16 @@
     position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,.6);
     padding:.8rem 1rem;border:1px solid rgba(255,255,255,.2);border-radius:8px;z-index:10
   }
+  /* —— Panel derecho con SOLO la gráfica de CO₂ flux —— */
+  #right{
+    position:fixed;right:0;top:0;bottom:0;width:min(420px,40vw);
+    background:rgba(0,0,0,.55);border-left:1px solid rgba(255,255,255,.2);
+    padding:.6rem .8rem;overflow:auto;z-index:6
+  }
+  #right h3{margin:.2rem 0 .4rem;font-size:15px}
+  #right .panel{margin-bottom:12px}
+  #right canvas{width:100%;height:280px}
+  #right .legend-note{opacity:.7;font-size:12px;margin-top:4px}
 </style>
 
 <!-- Import map: resuelve 'three' y los addons -->
@@ -32,6 +42,9 @@
   }
 }
 </script>
+<!-- Chart.js para la ÚNICA gráfica de CO₂ flux -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
 </head>
 <body>
 <canvas id="c"></canvas>
@@ -43,6 +56,15 @@
   <div id="station157">Torre 157: <code>—</code></div>
   <div style="margin-top:.35rem;opacity:.7;">Se actualiza cada ~10 min</div>
 </div>
+
+<!-- Panel derecho: SOLO CO₂ flux -->
+<aside id="right" aria-label="Panel de gráficas">
+  <div class="panel">
+    <h3>CO₂ flux (últimos 8 días)</h3>
+    <canvas id="co2Chart" aria-label="Gráfica de CO₂ flux"></canvas>
+    <div class="legend-note">Series de las torres 165 y 157 superpuestas</div>
+  </div>
+</aside>
 
 <div id="loading">Cargando modelo…</div>
 
@@ -64,6 +86,7 @@ const tooltip = document.getElementById('tooltip');
 const loading = document.getElementById('loading');
 const hud165  = document.getElementById('station165').querySelector('code');
 const hud157  = document.getElementById('station157').querySelector('code');
+const right   = document.getElementById('right');
 
 /* --- Mapa canónico para tolerar renombres (Mesh_0.011 vs Mesh_0011) --- */
 function canon(s){ return String(s||"").toLowerCase().replace(/[^\w]/g,""); }
@@ -147,6 +170,7 @@ loader.load(
 /* --- Tooltips on-hover --- */
 const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2(-1,-1);
+let overRight = false;
 
 window.addEventListener('pointermove', e=>{
   const r = renderer.domElement.getBoundingClientRect();
@@ -155,6 +179,8 @@ window.addEventListener('pointermove', e=>{
   tooltip.style.left = `${e.clientX}px`;
   tooltip.style.top  = `${e.clientY}px`;
 });
+right.addEventListener('pointerenter', ()=>{ overRight=true; tooltip.style.display='none'; });
+right.addEventListener('pointerleave', ()=>{ overRight=false; });
 
 function getLabelFrom(object){
   // 1) etiqueta exportada desde Blender (Custom Properties -> userData.label)
@@ -170,6 +196,7 @@ function getLabelFrom(object){
 }
 
 function updateTooltip(){
+  if (overRight) { tooltip.style.display='none'; return; }
   raycaster.setFromCamera(mouse, camera);
   const hits = raycaster.intersectObjects(scene.children, true);
   const hit = hits.find(h => h.object && h.object.isMesh);
@@ -201,9 +228,12 @@ function animate(now){
 requestAnimationFrame(animate);
 
 /* --- Datos (cada 10 min) --- */
-const VARIABLES = ["H","LE","Rn_1_1_1","ch4_flux","co2_flux"];
+const VARIABLES = ["H","LE","Rn_1_1_1","ch4_flux","co2_flux"]; // HUD conserva todas; gráficas: SOLO co2_flux
 function lastPoint(list){ if(!Array.isArray(list)) return null;
   for(let i=list.length-1;i>=0;i--){const [ts,v]=list[i]; if(v!=null) return {ts,v};} return null; }
+function tsToDate(ts){ return new Date(ts < 2e12 ? ts*1000 : ts); }
+function serie(d,k){ return (d.series?.[k]?.[0]?.data) || []; }
+
 async function fetchStation(stationId, windowDays=8){
   const nowS = Math.floor(Date.now()/1000), startS = nowS - windowDays*24*3600;
   const qs = new URLSearchParams({stationId:String(stationId), field:VARIABLES.join(","), startTime:String(startS), endTime:String(nowS)});
@@ -211,19 +241,60 @@ async function fetchStation(stationId, windowDays=8){
   if(!r.ok) throw new Error("Proxy error "+r.status);
   return r.json();
 }
-async function refreshData(){
+
+async function refreshHUD(){
   try {
     const [d165, d157] = await Promise.all([ fetchStation(165), fetchStation(157) ]);
     const fmt = d => VARIABLES.map(k=>{
-      const serie = (d.series?.[k]?.[0]?.data) || [];
-      const p = lastPoint(serie);
+      const p = lastPoint(serie(d,k));
       return `${k}: ${p ? Number(p.v).toFixed(2) : 'N/A'}`;
     }).join(" · ");
     hud165.textContent = fmt(d165);
     hud157.textContent = fmt(d157);
   } catch(e){ console.error(e); }
 }
-refreshData(); setInterval(refreshData, 600_000); // 10 min
+
+/* === ÚNICA gráfica: CO₂ flux (165 vs 157) === */
+let co2Chart = null;
+function buildOrUpdateCO2Chart(d165, d157){
+  const s165 = serie(d165,'co2_flux').filter(p=>p && p[1]!=null).map(([t,v])=>({x: tsToDate(t), y: v}));
+  const s157 = serie(d157,'co2_flux').filter(p=>p && p[1]!=null).map(([t,v])=>({x: tsToDate(t), y: v}));
+  const ctx = document.getElementById('co2Chart').getContext('2d');
+  const data = {
+    datasets: [
+      { label:'CO₂ flux – 165', data:s165, parsing:false, spanGaps:true, pointRadius:0, borderWidth:1.5 },
+      { label:'CO₂ flux – 157', data:s157, parsing:false, spanGaps:true, pointRadius:0, borderWidth:1.5 }
+    ]
+  };
+  const options = {
+    responsive:true, maintainAspectRatio:false,
+    scales: {
+      x: { type:'time', time:{ unit:'hour' }, ticks:{ maxTicksLimit:6 } },
+      y: { title:{ display:true, text:'µmol m⁻² s⁻¹' }, ticks:{ autoSkip:true } }
+    },
+    plugins:{
+      legend:{ position:'bottom' },
+      tooltip:{ mode:'nearest', intersect:false, callbacks:{
+        label:(ctx)=> `${ctx.dataset.label}: ${Number(ctx.parsed.y).toFixed(2)}`
+      }}
+    },
+    elements:{ line:{ tension:0.2 } }
+  };
+  if (co2Chart) { co2Chart.data = data; co2Chart.update(); }
+  else { co2Chart = new Chart(ctx, { type:'line', data, options }); }
+}
+
+async function refreshCO2(){
+  try{
+    const [d165, d157] = await Promise.all([ fetchStation(165), fetchStation(157) ]);
+    buildOrUpdateCO2Chart(d165, d157);
+  }catch(e){ console.error(e); }
+}
+
+// Primera carga + cada 10 min
+refreshHUD();
+refreshCO2();
+setInterval(()=>{ refreshHUD(); refreshCO2(); }, 600_000);
 </script>
 </body>
 </html>
