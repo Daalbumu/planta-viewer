@@ -21,6 +21,27 @@
     position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,.6);
     padding:.8rem 1rem;border:1px solid rgba(255,255,255,.2);border-radius:8px;z-index:10
   }
+
+  /* ====== (AGREGADO) Panel de gráfica CO₂ 157 a la derecha ====== */
+  #charts{
+    position:fixed;right:12px;top:12px;width:520px;max-height:calc(100% - 24px);
+    background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.2);border-radius:8px;
+    padding:.6rem .8rem;overflow:auto;z-index:6
+  }
+  #charts h3{margin:.2rem 0 .4rem;font-size:15px}
+  #charts .row{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+  #charts label{font-size:12px;opacity:.85}
+  #charts input,#charts select{
+    background:#1b1b1b;color:#fff;border:1px solid rgba(255,255,255,.2);
+    padding:.25rem .4rem;border-radius:6px;font-size:12px
+  }
+  #charts button{
+    cursor:pointer;background:#2a2a2a;color:#fff;border:1px solid rgba(255,255,255,.2);
+    padding:.35rem .6rem;border-radius:6px;font-size:12px
+  }
+  #chart_CO2_157{
+    background:rgba(255,255,255,.04);border-radius:6px;margin-top:.5rem; height:320px;
+  }
 </style>
 
 <!-- Import map: resuelve 'three' y los addons -->
@@ -32,6 +53,9 @@
   }
 }
 </script>
+
+<!-- (AGREGADO) Chart.js para la gráfica -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 </head>
 <body>
 <canvas id="c"></canvas>
@@ -42,6 +66,30 @@
   <div id="station165">Torre 165: <code>—</code></div>
   <div id="station157">Torre 157: <code>—</code></div>
   <div style="margin-top:.35rem;opacity:.7;">Se actualiza cada ~10 min</div>
+</div>
+
+<!-- (AGREGADO) Panel de gráfica de CO₂ — Torre 157 -->
+<div id="charts">
+  <div class="row" style="margin-bottom:.4rem;">
+    <h3 style="flex:1">CO₂ flux — Torre 157</h3>
+  </div>
+  <div class="row">
+    <label>Desde:&nbsp;<input type="datetime-local" id="dtFrom"></label>
+    <label>Hasta:&nbsp;<input type="datetime-local" id="dtTo"></label>
+    <button id="btnApply">Aplicar rango</button>
+    <span style="flex:1"></span>
+    <label>Últimos&nbsp;
+      <select id="selDays">
+        <option value="3">3d</option>
+        <option value="7">7d</option>
+        <option value="10" selected>10d</option>
+        <option value="14">14d</option>
+        <option value="30">30d</option>
+      </select>
+    </label>
+    <button id="btnLast">Usar últimos N días</button>
+  </div>
+  <canvas id="chart_CO2_157"></canvas>
 </div>
 
 <div id="loading">Cargando modelo…</div>
@@ -238,6 +286,80 @@ async function refreshData(){
   } catch(e){ console.error(e); }
 }
 refreshData(); setInterval(refreshData, 600_000); // 10 min
+
+/* ========== (AGREGADO) Gráfica CO₂ — Torre 157 ========== */
+const dtFrom = document.getElementById('dtFrom');
+const dtTo   = document.getElementById('dtTo');
+const btnApply = document.getElementById('btnApply');
+const btnLast  = document.getElementById('btnLast');
+const selDays  = document.getElementById('selDays');
+let co2Chart;
+
+const toEpochS = (dtLocal)=> Math.floor(new Date(dtLocal).getTime()/1000);
+const fmtTs = (ms)=> new Date(ms).toLocaleString([], {hour12:false, month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'});
+
+function upsertCO2157(labels, values){
+  const ctx = document.getElementById('chart_CO2_157');
+  if(co2Chart){ co2Chart.data.labels = labels; co2Chart.data.datasets[0].data = values; co2Chart.update(); return; }
+  co2Chart = new Chart(ctx, {
+    type:'line',
+    data:{ labels, datasets:[{ label:'co2_flux (µmol/m²s) — 157', data:values, fill:false, tension:0.2, pointRadius:0, borderWidth:2 }] },
+    options:{ animation:false, responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false}, tooltip:{mode:'index', intersect:false} },
+      scales:{ x:{ ticks:{ color:'#ddd', maxTicksLimit:6 }, grid:{ color:'rgba(255,255,255,.08)' } },
+              y:{ ticks:{ color:'#ddd' }, grid:{ color:'rgba(255,255,255,.08)' }, title:{display:true,text:'µmol m⁻² s⁻¹'} } }
+    }
+  });
+}
+
+async function fetchCO2157(startS, endS){
+  const qs = new URLSearchParams({
+    stationId:'157', field:'co2_flux', startTime:String(startS), endTime:String(endS), format:'highcharts'
+  });
+  const r = await fetch(`${PROXY_URL}?${qs}`, { cache:'no-store' });
+  if(!r.ok) throw new Error('Proxy error '+r.status);
+  const data = await r.json();
+  const serie = data?.series?.co2_flux?.[0]?.data || [];
+  const labels=[], values=[];
+  for(const [ts,v] of serie){ if(v==null) continue; labels.push(fmtTs(ts)); values.push(v); }
+  return {labels, values};
+}
+
+async function drawCO2157(startS, endS){
+  try{ const s = await fetchCO2157(startS,endS); upsertCO2157(s.labels, s.values); }
+  catch(e){ console.error('CO2 chart error:', e); }
+}
+
+// Defaults: últimos 10 días
+(function setDefaults(){
+  const now = new Date();
+  const from = new Date(now.getTime() - 10*24*3600*1000);
+  const toLocal = (d)=> {
+    const pad = n => String(n).padStart(2,'0');
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+  if(dtFrom) dtFrom.value = toLocal(from);
+  if(dtTo)   dtTo.value   = toLocal(now);
+})();
+
+// Eventos
+if(btnApply) btnApply.addEventListener('click', ()=>{
+  if(!dtFrom.value || !dtTo.value) return;
+  const startS = toEpochS(dtFrom.value), endS = toEpochS(dtTo.value);
+  drawCO2157(startS, endS);
+});
+if(btnLast) btnLast.addEventListener('click', ()=>{
+  const days = Number(selDays?.value||10);
+  const endS = Math.floor(Date.now()/1000);
+  const startS = endS - days*24*3600;
+  drawCO2157(startS, endS);
+});
+// Pintar inicial
+(function initialCO2(){
+  const endS = Math.floor(Date.now()/1000);
+  const startS = endS - 10*24*3600;
+  drawCO2157(startS, endS);
+})();
 </script>
 </body>
 </html>
